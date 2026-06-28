@@ -83,6 +83,7 @@
   }
   .bell:hover{border-color:var(--brass);color:var(--core)}
   .bell.on{background:rgba(127,166,91,.16);border-color:rgba(127,166,91,.5);color:var(--green)}
+  .bell[hidden]{display:none}
   .bell.prompt{animation:bellNudge 1.9s ease-in-out infinite}
   @keyframes bellNudge{0%,100%{box-shadow:0 0 0 0 rgba(255,166,61,0)}50%{box-shadow:0 0 0 4px rgba(255,166,61,.20)}}
   .dash.flash{animation:dashFlash .7s ease}
@@ -101,6 +102,7 @@
         <h2>Open requests</h2>
         <span class="live"><span class="pulse"></span> Live</span>
         <button class="bell" id="bell" title="Sound + popup alert when a new request arrives">🔕 Alerts off</button>
+        <button class="bell test" id="testSound" title="Play a test chime" hidden>🔊 Test</button>
       </div>
       <span class="station" id="station">KHALIL · Tables 05–10</span>
     </div>
@@ -147,33 +149,46 @@ let missed   = 0;          // requests that arrived while this tab was in the ba
 let audioCtx;
 
 const bell = document.getElementById("bell");
+const testBtn = document.getElementById("testSound");
 function paintBell(){
   bell.classList.toggle("on", alertsOn);
   bell.classList.toggle("prompt", !alertsOn);   // gently nudge until switched on
   bell.textContent = alertsOn ? "🔔 Alerts on" : "🔕 Alerts off";
+  testBtn.hidden = !alertsOn;                    // offer a way to verify sound once armed
 }
 // Browsers won't make sound until the user interacts once — a click unlocks this.
+// Returns a promise that resolves when the context is actually running.
 function ensureAudio(){
   try{
     audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
-    if (audioCtx.state === "suspended") audioCtx.resume();
+    if (audioCtx.state === "suspended") return audioCtx.resume().catch(()=>{});
   }catch(e){}
+  return Promise.resolve();
 }
-// A short two-note chime, synthesized so there's no audio file to host.
-function ding(){
-  ensureAudio();
-  if (!audioCtx) return;
+// Schedule a short three-note chime on the (now-running) context.
+function playChime(){
+  if (!audioCtx || audioCtx.state !== "running") return false;
   const now = audioCtx.currentTime;
-  [[880, 0], [1320, 0.12]].forEach(([freq, delay]) => {
+  const master = audioCtx.createGain();
+  master.gain.value = 0.8;                  // louder, for a noisy floor
+  master.connect(audioCtx.destination);
+  [[660, 0], [990, 0.11], [1320, 0.22]].forEach(([freq, delay]) => {
     const o = audioCtx.createOscillator(), g = audioCtx.createGain();
-    o.type = "sine"; o.frequency.value = freq;
-    o.connect(g); g.connect(audioCtx.destination);
+    o.type = "triangle"; o.frequency.value = freq;   // triangle carries better on tiny speakers
+    o.connect(g); g.connect(master);
     const t0 = now + delay;
     g.gain.setValueAtTime(0.0001, t0);
-    g.gain.exponentialRampToValueAtTime(0.3, t0 + 0.01);
-    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.35);
-    o.start(t0); o.stop(t0 + 0.4);
+    g.gain.exponentialRampToValueAtTime(0.7, t0 + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.4);
+    o.start(t0); o.stop(t0 + 0.45);
   });
+  return true;
+}
+// Resume first (async), THEN play — otherwise the chime is scheduled while the
+// context is still suspended and never sounds. Returns whether it played.
+async function ding(){
+  await ensureAudio();
+  return playChime();
 }
 function notify(r){
   if (!("Notification" in window) || Notification.permission !== "granted") return;
@@ -198,16 +213,31 @@ bell.onclick = async () => {
   localStorage.setItem(ALERT_KEY, alertsOn ? "1" : "0");
   paintBell();
   if (alertsOn){
-    ensureAudio();          // this click is the gesture that unlocks audio
-    ding();                 // confirmation chime so staff know it's armed
+    const played = await ding();   // this click unlocks audio + plays a confirmation chime
+    if (!played) flagMuted();      // unlocked but produced no sound (often a device mute switch)
     if ("Notification" in window && Notification.permission === "default"){
       try{ await Notification.requestPermission(); }catch(e){}
     }
   }
 };
+// Dedicated "Test" button so staff can confirm they'll actually hear it.
+testBtn.onclick = async () => {
+  const played = await ding();
+  testBtn.textContent = played ? "🔊 Test ✓" : "🔇 No sound?";
+  testBtn.title = played
+    ? "If you heard the chime, you're set."
+    : "Your browser played it but no sound came out — check the device isn't muted (on iPhone/iPad flip the side mute switch off and turn the volume up).";
+  setTimeout(() => { testBtn.textContent = "🔊 Test"; }, 2200);
+};
+function flagMuted(){
+  testBtn.textContent = "🔇 No sound?";
+  testBtn.title = "Alerts are on, but your device seems muted. Turn up the volume — on iPhone/iPad also flip the side mute switch off.";
+  setTimeout(() => { testBtn.textContent = "🔊 Test"; }, 3000);
+}
 paintBell();
-// If alerts were left on from a previous shift, unlock audio on the first tap/click.
-if (alertsOn) window.addEventListener("pointerdown", ensureAudio, { once:true });
+// Unlock audio on the very first interaction anywhere (covers alerts left on from a prior shift).
+["pointerdown","keydown"].forEach(ev =>
+  window.addEventListener(ev, ensureAudio, { once:true }));
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden){ missed = 0; document.title = BASE_TITLE; } // clear badge on return
 });
