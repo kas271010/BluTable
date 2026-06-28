@@ -23,12 +23,13 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT.firebaseapp.com",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_PROJECT.appspot.com",
-  messagingSenderId: "YOUR_SENDER_ID",
-  appId: "YOUR_APP_ID",
+  apiKey: "AIzaSyCXu4WQiUbGoPYgIBTqX5rMnuyIRKVHlIw",
+  authDomain: "blutable-52c13.firebaseapp.com",
+  projectId: "blutable-52c13",
+  storageBucket: "blutable-52c13.firebasestorage.app",
+  messagingSenderId: "825304804714",
+  appId: "1:825304804714:web:c7febec1b08b4661198913",
+  measurementId: "G-LV9N3XFZG4",
 };
 
 // Logical venue id — lets one Firebase project serve multiple lounges later.
