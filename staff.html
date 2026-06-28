@@ -75,6 +75,22 @@
   .card.acked .act.primary{display:none}
   .modeTag{margin-top:18px;font-size:11px;color:#6f6052;letter-spacing:.05em;text-align:center;max-width:640px}
   .modeTag b{color:var(--brass)}
+
+  .bell{
+    border:1px solid var(--line);background:var(--ash);color:var(--mute);
+    border-radius:999px;padding:5px 11px;font-size:11px;font-weight:600;cursor:pointer;
+    font-family:inherit;letter-spacing:.03em;white-space:nowrap;transition:.16s;
+  }
+  .bell:hover{border-color:var(--brass);color:var(--core)}
+  .bell.on{background:rgba(127,166,91,.16);border-color:rgba(127,166,91,.5);color:var(--green)}
+  .bell.prompt{animation:bellNudge 1.9s ease-in-out infinite}
+  @keyframes bellNudge{0%,100%{box-shadow:0 0 0 0 rgba(255,166,61,0)}50%{box-shadow:0 0 0 4px rgba(255,166,61,.20)}}
+  .dash.flash{animation:dashFlash .7s ease}
+  @keyframes dashFlash{
+    0%{box-shadow:0 0 0 0 rgba(255,166,61,0), 0 30px 60px -24px rgba(0,0,0,.6)}
+    30%{box-shadow:0 0 0 3px rgba(255,166,61,.55), 0 30px 60px -24px rgba(0,0,0,.6)}
+    100%{box-shadow:0 0 0 0 rgba(255,166,61,0), 0 30px 60px -24px rgba(0,0,0,.6)}
+  }
   @media (prefers-reduced-motion: reduce){*{animation:none !important;transition:none !important}}
 </style>
 </head>
@@ -84,6 +100,7 @@
       <div class="l">
         <h2>Open requests</h2>
         <span class="live"><span class="pulse"></span> Live</span>
+        <button class="bell" id="bell" title="Sound + popup alert when a new request arrives">🔕 Alerts off</button>
       </div>
       <span class="station" id="station">KHALIL · Tables 05–10</span>
     </div>
@@ -122,8 +139,90 @@ modeTag.innerHTML = store.mode === "firebase"
   ? '<span class="live"><span class="pulse"></span></span> Real-time via Firestore · requests appear the instant a guest sends them'
   : 'Local mode · syncs live with <b>guest.html</b> tabs on this device — add Firebase keys for true cross-device';
 
+// ── new-request alerts: chime · desktop notification · title-bar badge ───────
+const BASE_TITLE = document.title;
+const ALERT_KEY  = "tend:staff:alerts";
+let alertsOn = localStorage.getItem(ALERT_KEY) === "1";
+let missed   = 0;          // requests that arrived while this tab was in the background
+let audioCtx;
+
+const bell = document.getElementById("bell");
+function paintBell(){
+  bell.classList.toggle("on", alertsOn);
+  bell.classList.toggle("prompt", !alertsOn);   // gently nudge until switched on
+  bell.textContent = alertsOn ? "🔔 Alerts on" : "🔕 Alerts off";
+}
+// Browsers won't make sound until the user interacts once — a click unlocks this.
+function ensureAudio(){
+  try{
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+  }catch(e){}
+}
+// A short two-note chime, synthesized so there's no audio file to host.
+function ding(){
+  ensureAudio();
+  if (!audioCtx) return;
+  const now = audioCtx.currentTime;
+  [[880, 0], [1320, 0.12]].forEach(([freq, delay]) => {
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.type = "sine"; o.frequency.value = freq;
+    o.connect(g); g.connect(audioCtx.destination);
+    const t0 = now + delay;
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(0.3, t0 + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.35);
+    o.start(t0); o.stop(t0 + 0.4);
+  });
+}
+function notify(r){
+  if (!("Notification" in window) || Notification.permission !== "granted") return;
+  try{
+    const n = new Notification(`New request · Table ${r.table}`, {
+      body: (r.voice ? "🎤 voice → " : "") + r.msg,
+      tag: r.id,            // dedupe if the same request fires twice
+    });
+    n.onclick = () => { window.focus(); n.close(); };
+  }catch(e){}
+}
+function alertNew(fresh){
+  if (!alertsOn) return;
+  ding();
+  fresh.forEach(notify);
+  const dash = document.querySelector(".dash");
+  dash.classList.remove("flash"); void dash.offsetWidth; dash.classList.add("flash"); // restart flash
+  if (document.hidden){ missed += fresh.length; document.title = `🔔 (${missed}) ${BASE_TITLE}`; }
+}
+bell.onclick = async () => {
+  alertsOn = !alertsOn;
+  localStorage.setItem(ALERT_KEY, alertsOn ? "1" : "0");
+  paintBell();
+  if (alertsOn){
+    ensureAudio();          // this click is the gesture that unlocks audio
+    ding();                 // confirmation chime so staff know it's armed
+    if ("Notification" in window && Notification.permission === "default"){
+      try{ await Notification.requestPermission(); }catch(e){}
+    }
+  }
+};
+paintBell();
+// If alerts were left on from a previous shift, unlock audio on the first tap/click.
+if (alertsOn) window.addEventListener("pointerdown", ensureAudio, { once:true });
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden){ missed = 0; document.title = BASE_TITLE; } // clear badge on return
+});
+
+// ── live feed ────────────────────────────────────────────────────────────────
+let known = null; // ids already seen; null until the first snapshot seeds it
 store.subscribeOpen((rows) => {
   requests = FILTER_SECTION ? rows.filter(r => r.section === FILTER_SECTION) : rows;
+  if (known === null){
+    known = new Set(requests.map(r => r.id));      // seed silently — don't alert for the existing backlog
+  } else {
+    const fresh = requests.filter(r => !known.has(r.id));
+    requests.forEach(r => known.add(r.id));
+    if (fresh.length) alertNew(fresh);
+  }
   render();
 });
 
